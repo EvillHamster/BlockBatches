@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="description" content="DefectBatch — журнал контроля, база смесей и пользователи.">
+  <title>DefectBatch — Журнал контроля</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="access.css">
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <section class="login-screen" id="login-screen" hidden>
+    <form class="auth-card login-card" id="login-form" aria-labelledby="login-title">
+      <a class="brand login-brand" href="/"><img src="favicon.svg" alt="" width="36" height="36"><span>DefectBatch<span class="brand-dot">.</span></span></a>
+      <h1 id="login-title">Вход в систему</h1>
+      <p>Войдите в свою учётную запись.</p>
+      <label>Логин<input name="login" type="text" autocomplete="username" required maxlength="64" autofocus></label>
+      <label>Пароль<input name="password" type="password" autocomplete="current-password" required maxlength="128"></label>
+      <div class="form-error" id="login-error" role="alert" hidden></div>
+      <button class="button primary full" type="submit">Войти</button>
+    </form>
+  </section>
+  <div class="app-shell" id="application" hidden>
+    <aside class="sidebar" id="navigation" aria-label="Основная навигация">
+      <a class="brand" href="#journal"><img src="favicon.svg" alt="" width="36" height="36"><span>DefectBatch<span class="brand-dot">.</span></span></a>
+      <nav>
+        <button data-tab="journal"><span data-icon="dashboard"></span><span>Журнал контроля</span><i class="nav-dot"></i></button>
+        <button data-tab="mixtures"><span data-icon="database"></span><span>База смесей</span></button>
+        <button data-tab="users"><span data-icon="users"></span><span>Пользователи</span></button>
+      </nav>
+      <div class="sidebar-bottom">
+        <button class="profile" data-tab="account" title="Настройки аккаунта">
+          <span class="profile-avatar">АД</span>
+          <span><strong>Администратор</strong><small>ADMIN</small></span>
+          <span data-icon="settings"></span>
+        </button>
+      </div>
+    </aside>
+    <button class="sidebar-toggle" id="sidebar-toggle" aria-controls="navigation" aria-expanded="true" aria-label="Скрыть навигацию"><span data-icon="left"></span></button>
+    <div class="main-shell">
+      <header class="topbar">
+        <div class="breadcrumbs"><span>Рабочая область</span><span data-icon="right"></span><span id="breadcrumb">Журнал контроля</span></div>
+        <div class="topbar-right">
+          <button class="signed-in account-link" data-tab="account">Администратор · ADMIN</button>
+          <button class="logout-button" id="logout" aria-label="Выйти из системы" title="Выйти из системы"><span data-icon="logout"></span></button>
+          <span class="topbar-divider"></span>
+          <span class="header-date" id="header-date"></span>
+        </div>
+      </header>
+      <main>
+        <div id="page"></div>
+      </main>
+    </div>
+  </div>
+  <dialog id="editor" class="modal" aria-labelledby="editor-title"></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

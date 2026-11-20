@@ -1,0 +1,13 @@
+node_modules/
+.openai/
+.env
+.local/
+auth-preview.jpg
+*.log
+preview.jpg
+users-preview.jpg
+filters-preview.jpg
+*.zip
+*.mdf
+*.ldf
+*.bak
