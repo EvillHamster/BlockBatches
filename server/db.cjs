@@ -29,7 +29,7 @@ async function initialize() {
   } finally { await master.close(); }
   const pool = await connect(database);
   try {
-    for(const file of ['001-schema.sql','002-auth.sql']){
+    for(const file of ['001-schema.sql','002-auth.sql','003-blocking-records.sql','004-catalog-details.sql','005-source-record.sql','006-engineer-role.sql','007-persistent-sessions.sql','008-keyuser-guard.sql']){
       const schema = await fs.readFile(path.join(__dirname, '../sql',file), 'utf8');
       await pool.request().batch(schema);
     }

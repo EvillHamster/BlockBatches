@@ -4,14 +4,15 @@ const { sql } = require('./db.cjs');
 const { HttpError } = require('./validation.cjs');
 const scrypt = promisify(crypto.scrypt);
 const cookieName = 'defectbatch_session';
-const lifetime = 8 * 60 * 60;
+// Browsers cap persistent cookies at 400 days; renew on authenticated requests.
+const cookieLifetime = 400 * 24 * 60 * 60;
 const attempts = new Map();
 const parameters = {N:32768,r:8,p:1,maxmem:64*1024*1024};
 const dummyHash = 'scrypt$' + '0'.repeat(32) + '$' + '0'.repeat(128);
 
 function passwordValid(password) {
-  if(typeof password !== 'string' || password.length < 10 || password.length > 128)
-    throw new HttpError(400,'Пароль должен содержать от 10 до 128 символов');
+  if(typeof password !== 'string' || password.length < 4 || password.length > 128)
+    throw new HttpError(400,'Пароль должен содержать от 4 до 128 символов');
   return password;
 }
 async function hashPassword(password) {
@@ -35,17 +36,19 @@ function tokenOf(req){
   return token&&/^[A-Za-z0-9_-]{43}$/.test(token)?token:null;
 }
 function cookie(req,value,maxAge){
-  return cookieName+'='+value+'; HttpOnly; SameSite=Strict; Path=/; Max-Age='+maxAge+(req.socket.encrypted?'; Secure':'');
+  return cookieName+'='+value+'; HttpOnly; SameSite=Strict; Path=/; Max-Age='+maxAge+(req.socket.encrypted||process.env.COOKIE_SECURE==='true'?'; Secure':'');
 }
 function publicUser(user){return {id:user.id,name:user.name,login:user.login,role:user.role,version:user.version};}
-async function currentUser(pool,req){
+async function currentUser(pool,req,res){
   const token=tokenOf(req);
   if(!token)return null;
   const result=await pool.request().input('token',sql.Char(64),digest(token)).query(`
     SELECT u.id,u.name,u.login,u.role,u.version FROM dbo.Sessions s JOIN dbo.Users u ON u.id=s.userId
-    WHERE s.tokenHash=@token AND s.expiresAt>SYSUTCDATETIME()
+    WHERE s.tokenHash=@token AND (s.expiresAt IS NULL OR s.expiresAt>SYSUTCDATETIME())
   `);
-  return result.recordset[0]?publicUser(result.recordset[0]):null;
+  if(!result.recordset[0])return null;
+  if(res)res.setHeader('Set-Cookie',cookie(req,token,cookieLifetime));
+  return publicUser(result.recordset[0]);
 }
 function throttle(req,login){
   const now=Date.now();
@@ -67,12 +70,12 @@ async function login(pool,req,res,body){
   const old=tokenOf(req);
   const request=pool.request().input('token',sql.Char(64),digest(token)).input('id',sql.Int,user.id)
     .input('expectedHash',sql.NVarChar(256),user.passwordHash)
-    .input('expires',sql.DateTime2,new Date(Date.now()+lifetime*1000));
+    .input('expires',sql.DateTime2,null);
   if(old)await pool.request().input('token',sql.Char(64),digest(old)).query('DELETE FROM dbo.Sessions WHERE tokenHash=@token');
   const inserted=await request.query('DELETE FROM dbo.Sessions WHERE expiresAt<=SYSUTCDATETIME(); INSERT INTO dbo.Sessions(tokenHash,userId,expiresAt) OUTPUT INSERTED.userId SELECT @token,@id,@expires FROM dbo.Users WHERE id=@id AND passwordHash=@expectedHash');
   if(!inserted.recordset.length)throw new HttpError(401,'Неверный логин или пароль');
   attempts.delete(throttleKey);
-  res.setHeader('Set-Cookie',cookie(req,token,lifetime));
+  res.setHeader('Set-Cookie',cookie(req,token,cookieLifetime));
   return publicUser(user);
 }
 async function logout(pool,req,res){
@@ -81,6 +84,7 @@ async function logout(pool,req,res){
   res.setHeader('Set-Cookie',cookie(req,'',0));
 }
 async function changePassword(pool,req,res,user,body){
+  require('./user-management.cjs').confirmPassword(body,true);
   const next=passwordValid(body?.password);
   const row=await pool.request().input('id',sql.Int,user.id).query('SELECT passwordHash FROM dbo.Users WHERE id=@id');
   if(!await verifyPassword(body?.currentPassword,row.recordset[0]?.passwordHash))throw new HttpError(400,'Текущий пароль неверен');
@@ -96,4 +100,11 @@ async function changePassword(pool,req,res,user,body){
     `);
   res.setHeader('Set-Cookie',cookie(req,'',0));
 }
-module.exports={hashPassword,verifyPassword,passwordValid,currentUser,login,logout,changePassword};
+async function changeProfile(pool,user,body){
+ const {normalize,positive}=require('./validation.cjs');
+ const values=normalize('users',{...user,name:Object.hasOwn(body||{},'name')?body.name:user.name,login:Object.hasOwn(body||{},'login')?body.login:user.login});
+ const result=await pool.request().input('id',sql.Int,user.id).input('login',sql.NVarChar(64),values.login).input('name',sql.NVarChar(120),values.name).input('version',sql.Int,positive(body.version,'Версия'))
+  .query('DECLARE @changed TABLE(id int); UPDATE dbo.Users SET name=@name,login=@login,version=version+1 OUTPUT INSERTED.id INTO @changed WHERE id=@id AND version=@version; SELECT u.id,u.name,u.login,u.role,u.version FROM dbo.Users u JOIN @changed c ON c.id=u.id');
+ if(!result.recordset.length)throw new HttpError(409,'Аккаунт уже изменён. Обновите страницу.');return publicUser(result.recordset[0]);
+}
+module.exports={hashPassword,verifyPassword,passwordValid,currentUser,login,logout,changePassword,changeProfile};

@@ -13,6 +13,7 @@ async function provision(){
   try{
     await tx.request().query("DECLARE @result int; EXEC @result=sp_getapplock @Resource=N'DefectBatch-provision',@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=10000; IF @result<0 THROW 50001,'Provision lock unavailable',1;");
     for(const [login,role] of [['keyuser','KEYUSER'],['quality','QUALITY'],['admin','ADMIN'],['employer','EMPLOYER']]){
+      if(role==='KEYUSER'&&(await tx.request().query("SELECT id FROM dbo.Users WHERE role='KEYUSER'")).recordset.length)continue;
       const existing=await tx.request().input('login',sql.NVarChar(64),login).query('SELECT id,passwordHash FROM dbo.Users WHERE login=@login');
       if(existing.recordset[0]?.passwordHash)continue;
       const password=randomBytes(18).toString('base64url');

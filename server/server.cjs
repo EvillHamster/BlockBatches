@@ -4,6 +4,9 @@ const path = require('node:path');
 const { initialize, config } = require('./db.cjs');
 const repository = require('./repository.cjs');
 const auth = require('./auth.cjs');
+const excel = require('./excel.cjs');
+const catalogs=require('./catalogs.cjs');
+const Access=require('../dist/permissions.js'),userManagement=require('./user-management.cjs'),bulk=require('./bulk-delete.cjs');
 const { HttpError } = require('./validation.cjs');
 const root = path.resolve(__dirname, '../dist');
 const types = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.svg':'image/svg+xml' };
@@ -46,23 +49,64 @@ function createApp(pool) {
           await auth.logout(pool,req,res);
           return json(res,200,{ok:true});
         }
-        const user=await auth.currentUser(pool,req);
+        const user=await auth.currentUser(pool,req,res);
         if(!user)throw new HttpError(401,'Войдите в систему');
+        const requirePermission=permission=>{if(!Access.can(user,permission))throw new HttpError(403,'Недостаточно прав для этого действия');};
         if(url.pathname === '/api/auth/me' && req.method === 'GET')
           return json(res,200,{user});
         if(url.pathname === '/api/auth/password' && req.method === 'PUT'){
+          requirePermission('profile');
           await auth.changePassword(pool,req,res,user,await bodyOf(req));
           return json(res,200,{ok:true});
         }
-        if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, await repository.state(pool));
+        if(url.pathname === '/api/auth/profile' && req.method === 'PUT'){requirePermission('profile');return json(res,200,{user:await auth.changeProfile(pool,user,await bodyOf(req))});}
+        if (url.pathname === '/api/state' && req.method === 'GET'){
+          requirePermission('read');const state=await repository.state(pool);if(!Access.can(user,'users'))state.users=state.users.filter(row=>row.id===user.id);return json(res,200,state);
+        }
+        if(/^\/api\/records\/bulk\/(preview|commit)$/.test(url.pathname)&&req.method==='POST'){
+          requirePermission('bulk');const body=await bodyOf(req);return json(res,200,await (url.pathname.endsWith('/preview')?bulk.preview:bulk.commit)(pool,user,body));
+        }
+        const catalogMatch=/^\/api\/catalogs\/(reasons|operators)(?:\/([1-9]\d*))?$/.exec(url.pathname);
+        if(catalogMatch){
+          requirePermission('catalogs');
+          if(req.method==='POST'&&!catalogMatch[2])return json(res,200,await catalogs.add(pool,catalogMatch[1],await bodyOf(req)));
+          if(req.method==='PUT'&&catalogMatch[2])return json(res,200,await catalogs.edit(pool,catalogMatch[1],await bodyOf(req),Number(catalogMatch[2])));
+          if(req.method==='DELETE'&&catalogMatch[2]){await catalogs.remove(pool,catalogMatch[1],Number(catalogMatch[2]),(await bodyOf(req)).version);return json(res,200,{ok:true});}
+          throw new HttpError(405,'Метод не поддерживается');
+        }
+        const excelMatch=/^\/api\/excel\/(records|mixtures)\/(export|preview|import)$/.exec(url.pathname);
+        if(excelMatch){
+          const [,kind,action]=excelMatch;
+          requirePermission(action==='export'?'export':'import');if(kind==='mixtures')requirePermission('catalogs');
+          if(action==='export'&&req.method==='GET'){
+            const result=await excel.exportWorkbook(pool,kind,url.searchParams);
+            res.writeHead(200,{'Content-Type':excel.mime,'Content-Disposition':'attachment; filename="'+result.filename+'"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+            return res.end(Buffer.from(result.buffer));
+          }
+          if(['preview','import'].includes(action)&&req.method==='POST'){
+            if(!(req.headers['content-type']||'').startsWith(excel.mime))throw new HttpError(415,'Выберите файл .xlsx');
+            let size=0;const chunks=[];
+            for await(const chunk of req){size+=chunk.length;if(size>excel.maxFileSize)throw new HttpError(413,'Максимальный размер файла — 5 МБ');chunks.push(chunk);}
+            const buffer=Buffer.concat(chunks);
+            return json(res,200,await (action==='preview'?excel.previewImport:excel.commitImport)(pool,kind,buffer));
+          }
+          throw new HttpError(405,'Метод не поддерживается');
+        }
         if (url.pathname === '/api/import' && req.method === 'POST') {
+          requirePermission('users');if(user.role!=='KEYUSER')throw new HttpError(403,'Перенос начальных данных доступен только keyuser');
           await repository.importLocal(pool, await bodyOf(req));
           return json(res, 201, await repository.state(pool));
         }
         const match = /^\/api\/(records|mixtures|users)(?:\/([1-9]\d*))?$/.exec(url.pathname);
         if (!match) throw new HttpError(404, 'Адрес не найден');
         const [, kind, idText] = match;
+        requirePermission(kind==='records'?(req.method==='DELETE'?'delete':req.method==='GET'?'read':'write'):kind==='users'?'users':'catalogs');
         const body = req.method === 'GET' ? null : await bodyOf(req);
+        if(kind==='users'){
+          if(req.method==='POST'&&!idText)return json(res,201,{id:await userManagement.mutate(pool,user,'POST',body)});
+          if(['PUT','DELETE'].includes(req.method)&&idText){await userManagement.mutate(pool,user,req.method,body,Number(idText));return json(res,200,{ok:true});}
+          throw new HttpError(405,'Метод не поддерживается');
+        }
         if (req.method === 'POST' && !idText) {
           const id = await repository.save(pool, kind, body);
           return json(res, 201, { id });
@@ -90,13 +134,14 @@ function createApp(pool) {
     } catch (error) {
       const safe = repository.safeError(error);
       if (!(error instanceof HttpError)) console.error('Ошибка запроса:', error.message);
-      if (!res.headersSent) json(res, safe.status, { error:safe.message });
+      if (!res.headersSent) json(res, safe.status, { error:safe.message,...(safe.fields?{fields:safe.fields}:{}) });
       else res.end();
     }
   });
 }
 async function start() {
   const pool = await initialize();
+  await require('./bootstrap-keyuser.cjs').ensure(pool);
   const server = createApp(pool);
   const host = process.env.HOST || '127.0.0.1';
   const port = Number(process.env.PORT || 5173);

@@ -10,6 +10,12 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="access.css">
   <link rel="stylesheet" href="app.css">
+  <script src="permissions.js" defer></script>
+  <script src="record-rules.js" defer></script>
+  <script src="source-record.js" defer></script>
+  <script src="record-form.js" defer></script>
+  <script src="mixture-filter.js" defer></script>
+  <script src="access-ui.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -30,6 +36,8 @@
       <nav>
         <button data-tab="journal"><span data-icon="dashboard"></span><span>Журнал контроля</span><i class="nav-dot"></i></button>
         <button data-tab="mixtures"><span data-icon="database"></span><span>База смесей</span></button>
+        <button data-tab="operators"><span data-icon="user"></span><span>Операторы</span></button>
+        <button data-tab="reasons"><span data-icon="clipboard"></span><span>Причины вылетов</span></button>
         <button data-tab="users"><span data-icon="users"></span><span>Пользователи</span></button>
       </nav>
       <div class="sidebar-bottom">
@@ -46,6 +54,7 @@
         <div class="breadcrumbs"><span>Рабочая область</span><span data-icon="right"></span><span id="breadcrumb">Журнал контроля</span></div>
         <div class="topbar-right">
           <button class="signed-in account-link" data-tab="account">Администратор · ADMIN</button>
+          <button type="button" class="help-button button secondary" data-action="help">Помощь · F1</button>
           <button class="logout-button" id="logout" aria-label="Выйти из системы" title="Выйти из системы"><span data-icon="logout"></span></button>
           <span class="topbar-divider"></span>
           <span class="header-date" id="header-date"></span>
