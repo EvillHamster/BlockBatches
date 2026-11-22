@@ -28,6 +28,14 @@ async function state(pool) {
   return { mixtures: result.recordsets[0], users: result.recordsets[1], records: result.recordsets[2], canImport: result.recordsets[3][0].canImport,
     reasons:result.recordsets[4],operators:result.recordsets[5] };
 }
+async function revision(pool){
+  // Hash ordered identities/versions in SQL rather than returning the journal.
+  // Every application mutation increments version or changes the identity set.
+  const tables=['Mixtures','Users','Records','Reasons','Operators'];
+  const columns=tables.map(table=>"CONVERT(varchar(64),HASHBYTES('SHA2_256',(SELECT id,version FROM dbo.["+table+"] ORDER BY id FOR JSON PATH)),2) AS ["+table+"]");
+  const result=await pool.request().query('SELECT '+columns.join(',')+', (SELECT browserImportCompleted FROM dbo.AppState WHERE id=1) AS imported');
+  return require('node:crypto').createHash('sha256').update(JSON.stringify(result.recordset[0])).digest('hex');
+}
 async function save(pool, kind, body, id, options={}) {
   if(kind==='records'&&!(pool instanceof sql.Transaction)){
     const tx=new sql.Transaction(pool);await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -133,4 +141,4 @@ function safeError(error) {
   if (number === 547) return new HttpError(409, 'Проверьте смесь: она отсутствует или используется в журнале. Используемую смесь можно перенести в архив.');
   return new HttpError(503, 'Не удалось выполнить запрос к базе данных. Повторите попытку.');
 }
-module.exports = { state, save, remove, importLocal, safeError };
+module.exports = { state, revision, save, remove, importLocal, safeError };

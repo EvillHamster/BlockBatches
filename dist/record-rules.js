@@ -66,10 +66,13 @@
   }
   return {value,errors,valid:!Object.keys(errors).length};
  }
- function filterRecords(records,mixtures,f={}){
+ function recordSearchText(record,names){return (record.sup+' '+(names.get(record.mixtureId)||'—')+' '+(record.reasonName||'')+' '+(record.operatorName||'')+' '+(record.description||'')).toLowerCase();}
+ function buildRecordSearchIndex(records,mixtures){const names=new Map(mixtures.map(row=>[row.id,row.name]));return new Map(records.map(row=>[row.id,recordSearchText(row,names)]));}
+ function filterRecords(records,mixtures,f={},searchIndex){
   const names=new Map(mixtures.map(row=>[row.id,row.name])),search=String(f.search||'').toLowerCase(),mixture=f.mixture||f.mix;
-  return records.filter(r=>(r.sup+' '+(names.get(r.mixtureId)||'—')+' '+(r.reasonName||'')+' '+(r.operatorName||'')+' '+(r.description||'')).toLowerCase().includes(search)&&(!mixture||r.mixtureId===Number(mixture))&&(!f.line||r.line===f.line)&&(!f.from||r.date>=f.from)&&(!f.to||r.date<=f.to));
+  return records.filter(r=>(!mixture||r.mixtureId===Number(mixture))&&(!f.line||r.line===f.line)&&(!f.from||r.date>=f.from)&&(!f.to||r.date<=f.to)&&(!search||(searchIndex?.get(r.id)??recordSearchText(r,names)).includes(search)));
  }
+
  function distance(a,b){
   let previous=Array.from({length:b.length+1},(_,i)=>i),beforePrevious=null;
   for(let i=1;i<=a.length;i++){
@@ -105,5 +108,5 @@
    return {...option,score};
   }).filter(option=>Number.isFinite(option.score)).sort((a,b)=>a.score-b.score||a.name.localeCompare(b.name,'ru')).slice(0,limit);
  }
- return {lines,steps,fields,normalizeName,requiresSource,localDate,recentRecordWindow,filterRecords,validate,rankOptions};
+ return {lines,steps,fields,normalizeName,requiresSource,localDate,recentRecordWindow,buildRecordSearchIndex,filterRecords,validate,rankOptions};
 });

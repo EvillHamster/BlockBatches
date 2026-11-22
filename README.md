@@ -382,6 +382,9 @@ package-lock.json    Зафиксированные версии зависим�
 serve.cjs            Совместимый запуск сервера
 ```
 
+Результаты проверки на 1 000–50 000 записей, ограничения и команда повторения:
+[производительность](docs/performance.md).
+
 Документация библиотек: [node-mssql](https://github.com/tediousjs/node-mssql),
 [msnodesqlv8](https://github.com/TimelordUK/node-sqlserver-v8),
 [ExcelJS](https://github.com/exceljs/exceljs).

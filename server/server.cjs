@@ -28,6 +28,14 @@ async function bodyOf(req) {
   catch { throw new HttpError(400, 'Некорректный JSON'); }
 }
 function createApp(pool) {
+  let snapshot=null,pendingSnapshot=null;
+  async function stateSnapshot(revision){
+    if(snapshot?.revision===revision)return snapshot.value;
+    if(pendingSnapshot?.revision===revision)return pendingSnapshot.promise;
+    const pending={revision,promise:repository.state(pool)};pendingSnapshot=pending;
+    try{const value=await pending.promise;if(pendingSnapshot===pending)snapshot={revision,value};return value;}
+    finally{if(pendingSnapshot===pending)pendingSnapshot=null;}
+  }
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
@@ -61,7 +69,13 @@ function createApp(pool) {
         }
         if(url.pathname === '/api/auth/profile' && req.method === 'PUT'){requirePermission('profile');return json(res,200,{user:await auth.changeProfile(pool,user,await bodyOf(req))});}
         if (url.pathname === '/api/state' && req.method === 'GET'){
-          requirePermission('read');const state=await repository.state(pool);if(!Access.can(user,'users'))state.users=state.users.filter(row=>row.id===user.id);return json(res,200,state);
+          requirePermission('read');
+          const revision=await repository.revision(pool),etag='"'+revision+'-'+user.id+'-'+user.role+'"';
+          res.setHeader('ETag',etag);
+          if(req.headers['if-none-match']===etag){res.writeHead(304,{'Cache-Control':'no-store'});return res.end();}
+          const full=await stateSnapshot(revision);
+          const state=Access.can(user,'users')?full:{...full,users:full.users.filter(row=>row.id===user.id)};
+          return json(res,200,state);
         }
         if(/^\/api\/records\/bulk\/(preview|commit)$/.test(url.pathname)&&req.method==='POST'){
           requirePermission('bulk');const body=await bodyOf(req);return json(res,200,await (url.pathname.endsWith('/preview')?bulk.preview:bulk.commit)(pool,user,body));

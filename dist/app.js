@@ -1,3 +1,5 @@
+const profileEnabled=new URLSearchParams(location.search).get('profile')==='1';
+let firstReadyRendered=false;
 const $ = (s, root = document) => root.querySelector(s);
 const paths = {
  upload:'<path d="M12 16V4m-5 5 5-5 5 5M4 16v5h16v-5"/>',
@@ -23,9 +25,10 @@ const icon = (name, size=18) => '<svg width="'+size+'" height="'+size+'" viewBox
 document.querySelectorAll('[data-icon]').forEach(el=>el.innerHTML=icon(el.dataset.icon));
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let data={mixtures:[],records:[],users:[]};
+let stateETag=null,recordSearchIndex=null;
 let ready=false,loadError='',refreshBusy=false,currentUser=null;
 function showLogin(message=''){
- currentUser=null;ready=false;document.querySelector('#role-help')?.close();document.querySelector('.source-picker-modal')?.close();
+ currentUser=null;ready=false;stateETag=null;recordSearchIndex=null;document.querySelector('#role-help')?.close();document.querySelector('.source-picker-modal')?.close();
  $('#application').hidden=true;$('#login-screen').hidden=false;
  if($('#editor').open)$('#editor').close();
  $('#login-form').reset();
@@ -44,6 +47,8 @@ function showApplication(user){
 
 async function api(path, options={}){
  const response=await fetch('/api'+path,{cache:'no-store',...options,headers:{'Content-Type':'application/json',...options.headers}});
+ if(response.status===304&&path==='/state')return null;
+ if(response.ok&&path==='/state')stateETag=response.headers.get('ETag');
  let body;try{body=await response.json();}catch{throw new Error('Сервер недоступен. Запустите npm start.');}
  if(!response.ok){
   if(response.status===401&&path!=='/auth/login')showLogin('Войдите в систему');
@@ -52,9 +57,11 @@ async function api(path, options={}){
  return body;
 }
 async function refreshData(){
- const next=await api('/state');
- const changed=JSON.stringify(next)!==JSON.stringify(data);
- data=next;ready=true;loadError='';
+ const previousTag=stateETag;
+ const next=await api('/state',{headers:stateETag?{'If-None-Match':stateETag}:{}});
+ if(next===null){ready=true;loadError='';return false;}
+ const changed=stateETag?stateETag!==previousTag||!ready:JSON.stringify(next)!==JSON.stringify(data);
+ data=next;recordSearchIndex=RecordRules.buildRecordSearchIndex(data.records,data.mixtures);ready=true;loadError='';
  if(currentUser){const updated=data.users.find(u=>u.id===currentUser.id);if(updated)showApplication(updated);}
  return changed;
 }
@@ -123,7 +130,7 @@ function journalFilters(){
  return '<div class="filter-controls">'+wrapFilter(dates,from||to,'dates','Очистить даты')+wrapFilter(mixture,mix,'mixture','Очистить смесь')+wrapFilter(lines,line,'line','Очистить линию')+clearAllButton()+'</div>';
 }
 const heading=()=>'<div class="page-heading"><div><div class="eyebrow">DEFECTBATCH / '+eyebrow[tab]+'</div><h1>'+titles[tab]+'<span class="heading-dot"></span></h1><p>'+subtitles[tab]+'</p></div>'+(['journal','mixtures'].includes(tab)&&(tab!=='journal'||can('write'))?'<button class="button primary" data-action="new">'+icon('plus')+(tab==='journal'?'Новая запись':'Добавить смесь')+'</button>':'')+'</div>';
-function filteredRecords(){return RecordRules.filterRecords(data.records,data.mixtures,{search,mixture:mix,line,from,to}).sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id);}
+function filteredRecords(){return RecordRules.filterRecords(data.records,data.mixtures,{search,mixture:mix,line,from,to},recordSearchIndex).sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id);}
 function footer(total,label){
  const pages=Math.max(1,Math.ceil(total/pageSize));page=Math.min(page,pages);
  const forms=label==='смесей'?['смесь','смеси','смесей']:label==='пользователей'?['пользователь','пользователя','пользователей']:['запись','записи','записей'];
@@ -143,6 +150,7 @@ function recordDisplay(record,key){
  return value;
 }
 function sourceRecordLink(record){
+ if(!record.sourceRecordId)return '';
  const source=data.records.find(row=>row.id===record.sourceRecordId);
  return source?'<a class="source-record-link" href="#record/'+source.id+'">'+escapeHTML(sourceRecordLabel(source,data))+' ↗</a>':'';
 }
@@ -213,6 +221,7 @@ function account(){
 
 function empty(title,text){return '<div class="empty-state"><span class="empty-icon">'+icon(tab==='mixtures'?'database':'search',26)+'</span><h3>'+title+'</h3><p>'+text+'</p></div>';}
 function render(){
+ const renderStarted=profileEnabled?performance.now():0;
  if(currentUser&&!Access.page(currentUser,tab)){tab='journal';history.replaceState(null,'','#journal');notify('Раздел недоступен для вашей роли');}
  $('#page').dataset.view=tab;
  if(!ready){$('#page').innerHTML='<div class="empty-state"><h3>'+(loadError?'Не удалось загрузить данные':'Подключение к базе данных…')+'</h3><p>'+escapeHTML(loadError||'Загружаем записи, смеси и пользователей.')+'</p>'+(loadError?'<button type="button" class="button primary" data-action="retry-load">Повторить</button>':'')+'</div>';return;}
@@ -236,6 +245,11 @@ function render(){
   finally{button.disabled=false;}
  };
  showAddressedRecord();
+ if(profileEnabled){
+  const measuredPage=$('#page');measuredPage.dataset.renderMs=(performance.now()-renderStarted).toFixed(1);measuredPage.dataset.recordCount=String(data.records.length);
+  if(!firstReadyRendered){measuredPage.dataset.readyMs=performance.now().toFixed(1);firstReadyRendered=true;}
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{if(measuredPage.isConnected)measuredPage.dataset.paintMs=(performance.now()-renderStarted).toFixed(1);}));
+ }
 }
 function showAddressedRecord(){const match=/^#record\/([1-9]\d*)$/.exec(location.hash);if(match&&ready)openRecordView(Number(match[1]));}
 function navigate(){tab=Object.hasOwn(titles,location.hash.slice(1))?location.hash.slice(1):'journal';search='';mix='';line='';from='';to='';page=1;archived=false;render();}
