@@ -107,4 +107,4 @@ async function changeProfile(pool,user,body){
   .query('DECLARE @changed TABLE(id int); UPDATE dbo.Users SET name=@name,login=@login,version=version+1 OUTPUT INSERTED.id INTO @changed WHERE id=@id AND version=@version; SELECT u.id,u.name,u.login,u.role,u.version FROM dbo.Users u JOIN @changed c ON c.id=u.id');
  if(!result.recordset.length)throw new HttpError(409,'Аккаунт уже изменён. Обновите страницу.');return publicUser(result.recordset[0]);
 }
-module.exports={hashPassword,verifyPassword,passwordValid,currentUser,login,logout,changePassword,changeProfile};
+module.exports={hashPassword,verifyPassword,passwordValid,currentUser,login,logout,changePassword,changeProfile,throttle};

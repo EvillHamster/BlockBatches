@@ -22,7 +22,7 @@ async function preview(pool,user,body){
  const filters=filtersOf(body),state=await repository.state(pool),rows=rules.filterRecords(state.records,state.mixtures,filters);
  const all=!Object.values(filters).some(Boolean),count=rows.length;
  const ids=new Set(rows.map(row=>row.id));
- const blocked=state.records.some(row=>ids.has(row.sourceRecordId)&&!ids.has(row.id));
+ const blocked=state.records.some(row=>rules.sourceIds(row).some(id=>ids.has(id))&&!ids.has(row.id));
  return {count,all,filters,blocked,message:blocked?'На часть выбранных образцов ссылаются записи вне фильтра. Удаление невозможно без нарушения истории.':'',token:pack({userId:user.id,filters,digest:digest(rows),count,all,expires:Date.now()+10*60*1000,nonce:crypto.randomBytes(16).toString('hex')})};
 }
 async function commit(pool,user,body){
@@ -38,10 +38,10 @@ async function commit(pool,user,body){
   if(rows.length!==plan.count||digest(rows)!==plan.digest)throw new HttpError(409,'Состав или содержимое записей изменились. Обновите предварительный просмотр и подтвердите снова.');
   if(!rows.length)throw new HttpError(400,'Нет записей для удаления');
   const ids=new Set(rows.map(row=>row.id));
-  if(state.records.some(row=>ids.has(row.sourceRecordId)&&!ids.has(row.id)))throw new HttpError(409,'На выбранные образцы ссылаются записи вне фильтра. Измените фильтры.');
+  if(state.records.some(row=>rules.sourceIds(row).some(id=>ids.has(id))&&!ids.has(row.id)))throw new HttpError(409,'На выбранные образцы ссылаются записи вне фильтра. Измените фильтры.');
   const pending=new Map(rows.map(row=>[row.id,row]));
   // Delete dependants before sources, preserving the existing foreign key.
-  while(pending.size){const referenced=new Set([...pending.values()].map(row=>row.sourceRecordId));const leaves=[...pending.keys()].filter(id=>!referenced.has(id));if(!leaves.length)throw new HttpError(409,'Обнаружена циклическая связь образцов');for(let offset=0;offset<leaves.length;offset+=1000){const request=tx.request(),batch=leaves.slice(offset,offset+1000);batch.forEach((id,index)=>request.input('id'+index,sql.Int,id));await request.query('DELETE FROM dbo.Records WHERE id IN ('+batch.map((_,index)=>'@id'+index).join(',')+')');batch.forEach(id=>pending.delete(id));}}
+  while(pending.size){const referenced=new Set([...pending.values()].flatMap(row=>rules.sourceIds(row)));const leaves=[...pending.keys()].filter(id=>!referenced.has(id));if(!leaves.length)throw new HttpError(409,'Обнаружена циклическая связь образцов');for(let offset=0;offset<leaves.length;offset+=1000){const request=tx.request(),batch=leaves.slice(offset,offset+1000);batch.forEach((id,index)=>request.input('id'+index,sql.Int,id));await request.query('DELETE FROM dbo.Records WHERE id IN ('+batch.map((_,index)=>'@id'+index).join(',')+')');batch.forEach(id=>pending.delete(id));}}
   await tx.commit();receipts.set(plan.nonce,{deleted:rows.length,until:Date.now()+10*60*1000});return {deleted:rows.length};
  }catch(error){await tx.rollback().catch(()=>{});throw error;}
 }

@@ -13,7 +13,8 @@
   ['shift','Номер смены'],['operatorId','Оператор']
  ];
  const normalizeName=value=>String(value??'').normalize('NFKC').toLocaleLowerCase('ru-RU').replace(/ё/g,'е').replace(/\s+/gu,' ').trim();
- const requiresSource=name=>normalizeName(name)===normalizeName('Произведено из заблокированного MB');
+ const requiresSource=name=>normalizeName(name).replace(/мв/g,'mb')===normalizeName('Произведено из заблокированного MB');
+ const sourceIds=record=>Array.isArray(record.sourceRecordIds)?record.sourceRecordIds:record.sourceRecordId?[Number(record.sourceRecordId)]:[];
  function localDate(date=new Date()){
   return date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');
  }
@@ -40,6 +41,11 @@
    value[key]=empty?null:number;
    if((key==='mixtureId'&&empty)||(!empty&&(!Number.isSafeInteger(number)||number<1||number>2147483647)))errors[key]=key==='mixtureId'?'Выберите смесь из списка':'Выберите значение из справочника';
   }
+  const sources=sourceIds(input);
+  if(!Array.isArray(sources)||sources.some(id=>!Number.isSafeInteger(id)||id<1||id>2147483647))errors.sourceRecordId='Выберите исходные образцы из списка';
+  if(input.sourceRecordIds!==undefined&&!Array.isArray(input.sourceRecordIds))errors.sourceRecordId='Выберите исходные образцы из списка';
+  value.sourceRecordIds=[...new Set(sources)].sort((a,b)=>a-b);
+  value.sourceRecordId=value.sourceRecordIds[0]??null;
   for(const key of ['batchNumber','palletNumber','sampleNumber']){
    const raw=str(key);value[key]=raw||null;
    if(input[key]!==undefined&&input[key]!==null&&input[key]!==''&&typeof input[key]!=='string'){errors[key]='Введите номер или диапазон текстом';continue;}
@@ -62,7 +68,7 @@
   value.description=typeof input.description==='string'&&input.description.trim()?input.description:null;
   if(value.description?.length>4000)errors.description='Описание должно быть не длиннее 4000 символов';
   for(const [key,label] of fields){
-   if(key!=='operatorId'&&(value[key]===null||value[key]===undefined||value[key]==='')&&!errors[key])errors[key]='Заполните поле «'+label+'»';
+   if(!['operatorId','sampleNumber'].includes(key)&&(value[key]===null||value[key]===undefined||value[key]==='')&&!errors[key])errors[key]='Заполните поле «'+label+'»';
   }
   return {value,errors,valid:!Object.keys(errors).length};
  }
@@ -108,5 +114,5 @@
    return {...option,score};
   }).filter(option=>Number.isFinite(option.score)).sort((a,b)=>a.score-b.score||a.name.localeCompare(b.name,'ru')).slice(0,limit);
  }
- return {lines,steps,fields,normalizeName,requiresSource,localDate,recentRecordWindow,buildRecordSearchIndex,filterRecords,validate,rankOptions};
+ return {lines,steps,fields,normalizeName,requiresSource,sourceIds,localDate,recentRecordWindow,buildRecordSearchIndex,filterRecords,validate,rankOptions};
 });

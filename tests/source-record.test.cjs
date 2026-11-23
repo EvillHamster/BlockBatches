@@ -19,14 +19,14 @@ test('source links persist across lines, reject invalid links and preserve histo
   const childId=await repository.save(pool,'records',{...child,sourceRecordId:sourceId});
   let state=await repository.state(pool),source=state.records.find(row=>row.id===sourceId),saved=state.records.find(row=>row.id===childId);
   assert.equal(saved.sourceRecordId,sourceId);assert.equal(source.line,'RW');
-  await assert.rejects(repository.save(pool,'records',{...saved,sourceRecordId:childId},childId),e=>e.status===400);
-  await assert.rejects(repository.save(pool,'records',{...source,reasonId:special.id,sourceRecordId:childId},sourceId),e=>e.status===400);
+  await assert.rejects(repository.save(pool,'records',{...saved,sourceRecordId:childId,sourceRecordIds:[childId]},childId),e=>e.status===400);
+  await assert.rejects(repository.save(pool,'records',{...source,reasonId:special.id,sourceRecordId:childId,sourceRecordIds:[childId]},sourceId),e=>e.status===400);
   await assert.rejects(repository.remove(pool,'records',sourceId,source.version),e=>e.status===409);
   const exported=await excel.exportWorkbook(pool,'records');const wb=new ExcelJS.Workbook();await wb.xlsx.load(exported.buffer);
   assert.equal(wb.worksheets[0].getCell('N1').value,'Исходная запись (ID)');
   const preview=await excel.previewImport(pool,'records',Buffer.from(exported.buffer));assert.equal(preview.errorCount,0);assert.equal(preview.skipped,2);
   await pool.close();pool=await initialize();state=await repository.state(pool);assert.equal(state.records.find(row=>row.id===childId).sourceRecordId,sourceId);
-  saved=state.records.find(row=>row.id===childId);await repository.save(pool,'records',{...saved,reasonId:reason.id,sourceRecordId:null},childId);
+  saved=state.records.find(row=>row.id===childId);await repository.save(pool,'records',{...saved,reasonId:reason.id,sourceRecordId:null,sourceRecordIds:[]},childId);
   await repository.remove(pool,'records',sourceId,source.version);
  }finally{
   if(pool)await pool.close();if(created){const master=await connect('master');try{await master.request().query('ALTER DATABASE ['+database+'] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE ['+database+'];');}finally{await master.close();}}delete process.env.DB_NAME;

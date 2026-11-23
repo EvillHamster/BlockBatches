@@ -27,11 +27,20 @@ const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&am
 let data={mixtures:[],records:[],users:[]};
 let stateETag=null,recordSearchIndex=null;
 let ready=false,loadError='',refreshBusy=false,currentUser=null;
-function showLogin(message=''){
+let setupMode=false;
+function showLogin(message='',initialSetup=false){
  currentUser=null;ready=false;stateETag=null;recordSearchIndex=null;document.querySelector('#role-help')?.close();document.querySelector('.source-picker-modal')?.close();
  $('#application').hidden=true;$('#login-screen').hidden=false;
  if($('#editor').open)$('#editor').close();
  $('#login-form').reset();
+ setupMode=initialSetup;
+ const form=$('#login-form');
+ $('#login-title').textContent=setupMode?'Регистрация keyuser':'Вход в систему';
+ $('#login-description').textContent=setupMode?'Создайте первый аккаунт. Он получит роль keyuser и сможет управлять пользователями.':'Войдите в свою учётную запись.';
+ for(const [id,name] of [['setup-name-field','name'],['setup-confirm-field','passwordConfirm']]){$('#'+id).hidden=!setupMode;form.elements[name].disabled=!setupMode;form.elements[name].required=setupMode;}
+ form.elements.password.autocomplete=setupMode?'new-password':'current-password';form.elements.password.minLength=setupMode?4:1;
+ $('button[type="submit"]',form).textContent=setupMode?'Создать аккаунт keyuser':'Войти';
+ if(setupMode)form.elements.login.value='keyuser';
  $('#login-error').hidden=!message;$('#login-error').textContent=message;
 }
 function showApplication(user){
@@ -72,6 +81,7 @@ async function afterMutation(message){
 async function bootstrap(){
  ready=false;loadError='';render();
  try{
+  const setup=await api('/setup');if(setup.available){showLogin('',true);return;}
   const session=await api('/auth/me');showApplication(session.user);
   await refreshData();
   if(data.canImport&&!data.mixtures.length&&!data.users.length&&!data.records.length){
@@ -150,9 +160,7 @@ function recordDisplay(record,key){
  return value;
 }
 function sourceRecordLink(record){
- if(!record.sourceRecordId)return '';
- const source=data.records.find(row=>row.id===record.sourceRecordId);
- return source?'<a class="source-record-link" href="#record/'+source.id+'">'+escapeHTML(sourceRecordLabel(source,data))+' ↗</a>':'';
+ return RecordRules.sourceIds(record).map(id=>{const source=data.records.find(row=>row.id===id);return source?'<a class="source-record-link" href="#record/'+source.id+'">'+escapeHTML(sourceRecordLabel(source,data))+' ↗</a>':'';}).join('');
 }
 let recordViewTrail=[];
 function openRecordView(id){
@@ -456,9 +464,9 @@ $('#login-form').onsubmit=async e=>{
  const f=e.currentTarget,button=$('button[type="submit"]',f),err=$('#login-error');
  button.disabled=true;err.hidden=true;
  try{
-  const result=await api('/auth/login',{method:'POST',body:JSON.stringify({login:f.elements.login.value.trim(),password:f.elements.password.value})});
+  const result=await api(setupMode?'/setup/register':'/auth/login',{method:'POST',body:JSON.stringify({login:f.elements.login.value.trim(),password:f.elements.password.value,...(setupMode?{name:f.elements.name.value.trim(),passwordConfirm:f.elements.passwordConfirm.value}:{})})});
   f.reset();showApplication(result.user);await bootstrap();
- }catch(error){err.hidden=false;err.textContent=error.message;f.elements.password.value='';}
+ }catch(error){if(setupMode&&error.status===409)showLogin(error.message);else{err.hidden=false;err.textContent=error.message;f.elements.password.value='';f.elements.passwordConfirm.value='';}}
  finally{button.disabled=false;}
 };
 $('#logout').onclick=async()=>{

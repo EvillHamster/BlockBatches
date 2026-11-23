@@ -1,13 +1,13 @@
 const ExcelJS=require('exceljs');
 const {sql}=require('./db.cjs');
 const repository=require('./repository.cjs');
-const {HttpError,normalize}=require('./validation.cjs');
+const {HttpError,normalize,normalizeLegacy,positive}=require('./validation.cjs');
 const recordRules=require('../dist/record-rules.js');
 const mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const maxFileSize=5*1024*1024;
 const maxRows=5000;
 const definitions={
- records:{sheet:'Журнал контроля',file:'DefectBatch-journal.xlsx',columns:recordRules.fields.map(([key,label])=>[({mixtureId:'mixtureName',reasonId:'reasonName',operatorId:'operatorName'}[key]||key),label,key==='description'?50:24]).concat([['sourceRecordId','Исходная запись (ID)',24]])},
+ records:{sheet:'Журнал контроля',file:'DefectBatch-journal.xlsx',columns:recordRules.fields.map(([key,label])=>[({mixtureId:'mixtureName',reasonId:'reasonName',operatorId:'operatorName'}[key]||key),label,key==='description'?50:24]).concat([['sourceRecordId','Исходная запись (ID)',24],['exportId','ID записи',16],['sourceRecordIds','Исходные записи (ID)',28],['recordFormatVersion','Версия записи',16],['actual','Т факт (история)',20],['equipment','Т оборудования (история)',24],['author','Сотрудник (история)',24]])},
  mixtures:{sheet:'База смесей',file:'DefectBatch-mixtures.xlsx',columns:[
   ['name','Название смеси',32],['archived','Статус',18],['recordCount','Записей',14]
  ]}
@@ -38,7 +38,7 @@ async function exportWorkbook(pool,kind,query){
  sheet.columns=def.columns.map(([key,header,width])=>({key,header,width}));
  for(const row of rows){
   const values={...row};
-  if(kind==='records')values.date=new Date(row.date+'T00:00:00Z');
+  if(kind==='records'){values.date=new Date(row.date+'T00:00:00Z');values.exportId=row.id;values.sourceRecordIds=recordRules.sourceIds(row).join('; ');}
   if(kind==='mixtures')values.archived=row.archived?'В архиве':'В работе';
   sheet.addRow(values);
  }
@@ -141,13 +141,15 @@ async function parseWorkbook(kind,buffer){
    if(kind==='mixtures')normalized=normalize('mixtures',{name:String(values.name),archived:status(values.archived??'')});
    else{
     if(typeof values.sup==='number'&&(!Number.isSafeInteger(values.sup)||Math.abs(values.sup)>=1e15))throw new Error('SUP нужно записать текстом, чтобы не потерять цифры');
+    const sourceRecordIds=String(values.sourceRecordIds??'').trim()?String(values.sourceRecordIds).trim().split(/[;,\s]+/).map(value=>positive(Number(value),'Исходные записи')):values.sourceRecordId? [positive(Number(values.sourceRecordId),'Исходная запись')]:[];
     const base={
      date:dateValue(values.date,workbook.properties.date1904),sup:String(values.sup),mixtureId:1,
      line:String(values.line).trim().toUpperCase(),step:values.step===undefined?'':String(values.step).trim(),
      batchNumber:String(values.batchNumber??''),palletNumber:String(values.palletNumber??''),sampleNumber:String(values.sampleNumber??''),
-     blockedWeight:values.blockedWeight??null,sourceRecordId:values.sourceRecordId??null,reasonId:String(values.reasonName??'').trim()?1:null,operatorId:null,description:values.description===undefined?'':String(values.description),shift:values.shift??null
+     blockedWeight:values.blockedWeight??null,sourceRecordIds,reasonId:String(values.reasonName??'').trim()?1:null,operatorId:null,description:values.description===undefined?'':String(values.description),shift:values.shift??null,
+     recordFormatVersion:Number(values.recordFormatVersion||2),actual:numeric(values.actual??''),equipment:numeric(values.equipment??''),author:values.author?String(values.author):null
     };
-    normalized={...normalize('records',base),mixtureName:String(values.mixtureName).trim(),
+    normalized={...(base.recordFormatVersion===1?normalizeLegacy(base):normalize('records',base)),exportId:values.exportId?positive(Number(values.exportId),'ID записи'):null,mixtureName:String(values.mixtureName).trim(),
      reasonName:String(values.reasonName??'').trim(),operatorName:String(values.operatorName??'').trim()};
     if(!normalized.mixtureName)throw new Error('Укажите смесь');
    }
@@ -157,11 +159,11 @@ async function parseWorkbook(kind,buffer){
  return {rows,errors,total,errorCount};
 }
 function recordKey(row){
- return JSON.stringify([...recordRules.fields,['sourceRecordId']].map(([key])=>{const value=row[key];return typeof value==='string'?nameKey(value):value??null;}));
+ return JSON.stringify([...recordRules.fields.map(([key])=>{const value=row[key];return typeof value==='string'?nameKey(value):value??null;}),[...recordRules.sourceIds(row)].sort((a,b)=>a-b),row.recordFormatVersion===1?[row.actual??null,row.equipment??null,row.author??null]:null]);
 }
 function makePlan(kind,parsed,state){
  const candidates=[],errors=[...parsed.errors],catalog=new Map(state.mixtures.map(m=>[nameKey(m.name),m]));
- const seen=new Set(state.records.map(recordKey));
+ const seen=new Map(state.records.map(row=>[recordKey(row),row.id])),prepared=[];
  let skipped=0,errorCount=parsed.errorCount;
  for(const row of parsed.rows){
   if(kind==='mixtures'){
@@ -182,14 +184,33 @@ function makePlan(kind,parsed,state){
   }
   if(!missing){
    const reason=(state.reasons||[]).find(row=>row.id===value.reasonId),needsSource=recordRules.requiresSource(reason?.name);
-   if((needsSource&&!value.sourceRecordId)||(value.sourceRecordId&&(!needsSource||!state.records.some(row=>row.id===value.sourceRecordId)))){
-    errorCount++;missing=true;if(errors.length<50)errors.push({row:row.number,message:'Проверьте исходный образец: укажите ID существующей записи для причины «Произведено из заблокированного MB»'});
+   if((needsSource&&!value.sourceRecordIds.length)||(value.sourceRecordIds.length&&!needsSource)){
+    errorCount++;missing=true;if(errors.length<50)errors.push({row:row.number,message:'Проверьте исходные образцы для причины «Произведено из заблокированного MB»'});
    }
   }
   if(missing)continue;
-  const key=recordKey(value);
-  if(seen.has(key)){skipped++;continue;}
-  seen.add(key);candidates.push({...row,value});
+  prepared.push({...row,value});
+ }
+ if(kind==='records'){
+  const exported=new Map(),resolved=new Map(),existing=new Set(state.records.map(row=>row.id));
+  const fail=(row,message)=>{errorCount++;if(errors.length<50)errors.push({row:row.number,message});};
+  for(const row of parsed.rows)if(row.value.exportId){if(exported.has(row.value.exportId))fail(row,'Повторный ID записи в файле');exported.set(row.value.exportId,row);}
+  let pending=prepared;
+  while(pending.length){
+   const waiting=[];let progressed=false;
+   for(const row of pending){
+    const ids=row.value.sourceRecordIds;
+    if(ids.some(id=>exported.has(id)&&!resolved.has(id))){waiting.push(row);continue;}
+    if(ids.some(id=>!exported.has(id)&&!existing.has(id))){fail(row,'Исходный образец отсутствует. Включите его в файл вместе с ID записи. Старый файл без ID записей не позволяет восстановить удалённые связи.');progressed=true;continue;}
+    const value={...row.value,sourceRecordIds:[...new Set(ids.map(id=>exported.has(id)?resolved.get(id):id))].sort((a,b)=>a-b)};value.sourceRecordId=value.sourceRecordIds[0]??null;
+    const key=recordKey(value),temporaryId=seen.get(key)??-row.number;
+    if(seen.has(key))skipped++;else{seen.set(key,temporaryId);candidates.push({...row,value,temporaryId});}
+    if(row.value.exportId)resolved.set(row.value.exportId,temporaryId);
+    progressed=true;
+   }
+   if(!progressed){for(const row of waiting)fail(row,'Циклическая связь или исходный образец содержит ошибку. Проверьте ID исходных записей.');break;}
+   pending=waiting;
+  }
  }
  return {candidates,summary:{total:parsed.total,added:candidates.length,skipped,errorCount,errors,
   columns:definitions[kind].columns.filter(c=>c[0]!=='recordCount').map(c=>c[1]),
@@ -207,7 +228,13 @@ async function commitImport(pool,kind,buffer){
   const plan=makePlan(kind,parsed,await repository.state(tx));
   if(plan.summary.errorCount)throw new HttpError(400,'Импорт отменён. Строка '+plan.summary.errors[0].row+': '+plan.summary.errors[0].message);
   if(!parsed.total)throw new HttpError(400,'В файле нет строк для импорта');
-  for(const row of plan.candidates)await repository.save(tx,kind,row.value,undefined,{allowArchivedMixture:true});
+  const inserted=new Map();
+  for(const row of plan.candidates){
+   const value=kind==='records'?{...row.value,sourceRecordIds:row.value.sourceRecordIds.map(id=>id<0?inserted.get(id):id)}:row.value;
+   if(kind==='records')value.sourceRecordId=value.sourceRecordIds[0]??null;
+   const id=await repository.save(tx,kind,value,undefined,{allowArchivedMixture:true,allowLegacy:true});
+   if(kind==='records')inserted.set(row.temporaryId,id);
+  }
   await tx.commit();
   return {added:plan.candidates.length,skipped:plan.summary.skipped};
  }catch(error){await tx.rollback().catch(()=>{});throw error;}

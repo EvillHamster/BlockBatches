@@ -1,5 +1,5 @@
 const { sql } = require('./db.cjs');
-const { HttpError, normalize, positive } = require('./validation.cjs');
+const { HttpError, normalize, normalizeLegacy, positive } = require('./validation.cjs');
 const {hashPassword} = require('./auth.cjs');
 const {requiresSource}=require('../dist/record-rules.js');
 const entities = {
@@ -24,7 +24,10 @@ async function state(pool) {
     SELECT CONVERT(bit,1-CONVERT(int,browserImportCompleted)) AS canImport FROM dbo.AppState WHERE id=1;
     SELECT id,name,version FROM dbo.Reasons ORDER BY name;
     SELECT id,name,lastName,firstName,version FROM dbo.Operators ORDER BY name;
+    SELECT recordId,sourceId FROM dbo.RecordSources ORDER BY recordId,sourceId;
   `);
+  const sources=new Map();for(const link of result.recordsets[6]){if(!sources.has(link.recordId))sources.set(link.recordId,[]);sources.get(link.recordId).push(link.sourceId);}
+  for(const record of result.recordsets[2])record.sourceRecordIds=sources.get(record.id)||(record.sourceRecordId?[record.sourceRecordId]:[]);
   return { mixtures: result.recordsets[0], users: result.recordsets[1], records: result.recordsets[2], canImport: result.recordsets[3][0].canImport,
     reasons:result.recordsets[4],operators:result.recordsets[5] };
 }
@@ -43,25 +46,23 @@ async function save(pool, kind, body, id, options={}) {
     catch(error){await tx.rollback().catch(()=>{});throw error;}
   }
   const { table, columns:baseColumns } = entity(kind);
-  const values = normalize(kind, body);
+  const values = kind==='records'&&options.allowLegacy&&body.recordFormatVersion===1?normalizeLegacy(body):normalize(kind, body);
   const columns={...baseColumns};
+  if(kind==='records'&&values.recordFormatVersion===1)Object.assign(columns,{actual:sql.Decimal(10,2),equipment:sql.Decimal(10,2),author:sql.NVarChar(120)});
   if(kind==='records'){
     const reason=await pool.request().input('id',sql.Int,values.reasonId).query('SELECT name FROM dbo.Reasons WHERE id=@id');
     const needsSource=requiresSource(reason.recordset[0]?.name);
     let sourceError='';
-    if(needsSource&&!values.sourceRecordId)sourceError='Выберите исходный заблокированный образец';
-    if(values.sourceRecordId){
+    if(needsSource&&!values.sourceRecordIds.length)sourceError='Выберите исходные заблокированные образцы';
+    if(values.sourceRecordIds.length){
       if(!needsSource)sourceError='Связь с образцом доступна только для причины «Произведено из заблокированного MB»';
       else{
-        const chain=await pool.request().input('source',sql.Int,values.sourceRecordId).input('self',sql.Int,id??null).query(`
-          ;WITH chain AS (
-            SELECT id,sourceRecordId,0 AS depth,CAST('/'+CAST(id AS varchar(11))+'/' AS varchar(max)) AS visited FROM dbo.Records WHERE id=@source
-            UNION ALL SELECT r.id,r.sourceRecordId,c.depth+1,CAST(c.visited+CAST(r.id AS varchar(11))+'/' AS varchar(max))
-            FROM dbo.Records r JOIN chain c ON r.id=c.sourceRecordId
-            WHERE c.depth<100 AND c.visited NOT LIKE '%/'+CAST(r.id AS varchar(11))+'/%'
-          ) SELECT id,depth FROM chain OPTION(MAXRECURSION 101)`);
-        if(!chain.recordset.length)sourceError='Исходный образец уже удалён. Выберите другой';
-        else if(chain.recordset.some(row=>row.id===id)||chain.recordset.some(row=>row.depth===100))sourceError='Нельзя создать циклическую связь образцов';
+        const graph=await pool.request().query('SELECT id FROM dbo.Records; SELECT recordId,sourceId FROM dbo.RecordSources;');
+        const existing=new Set(graph.recordsets[0].map(row=>row.id)),edges=new Map();
+        for(const link of graph.recordsets[1]){if(!edges.has(link.recordId))edges.set(link.recordId,[]);edges.get(link.recordId).push(link.sourceId);}
+        if(values.sourceRecordIds.some(source=>!existing.has(source)))sourceError='Исходный образец уже удалён. Выберите другой';
+        const pending=[...values.sourceRecordIds],visited=new Set();
+        while(pending.length){const next=pending.pop();if(next===id){sourceError='Нельзя создать циклическую связь образцов';break;}if(visited.has(next))continue;visited.add(next);pending.push(...(edges.get(next)||[]));}
       }
     }
     if(sourceError){const error=new HttpError(400,sourceError);error.fields={sourceRecordId:sourceError};throw error;}
@@ -80,6 +81,11 @@ async function save(pool, kind, body, id, options={}) {
     }
   }
   const request = pool.request();
+  async function writeSources(recordId){
+    if(kind!=='records')return;
+    await pool.request().input('id',sql.Int,recordId).query('DELETE dbo.RecordSources WHERE recordId=@id');
+    for(const sourceId of values.sourceRecordIds)await pool.request().input('id',sql.Int,recordId).input('source',sql.Int,sourceId).query('INSERT dbo.RecordSources(recordId,sourceId) VALUES(@id,@source)');
+  }
   for (const [name, type] of Object.entries(columns)) request.input(name, type, values[name]);
   if (id !== undefined) {
     request.input('id', sql.Int, positive(id));
@@ -90,17 +96,17 @@ async function save(pool, kind, body, id, options={}) {
       Object.keys(columns).map(name => '[' + name + ']=@' + name).join(',') +
       ', version=version+1 OUTPUT INSERTED.id'+(kind==='users'?' INTO @changed':'')+' WHERE id=@id AND version=@version'+(kind==='users'?'; SELECT id FROM @changed;':'')+(resetPassword?'; IF @@ROWCOUNT>0 DELETE FROM dbo.Sessions WHERE userId=@id;'+(ownPasswordTransaction?' COMMIT TRANSACTION;':''):''));
     if (!result.recordset.length) throw new HttpError(409, 'Данные уже изменены или удалены. Обновите страницу и повторите.');
-    return result.recordset[0].id;
+    await writeSources(result.recordset[0].id);return result.recordset[0].id;
   }
   const names = Object.keys(columns);
   const result = await request.query('INSERT INTO dbo.[' + table + '] (' + names.map(n => '[' + n + ']').join(',') +
-    ') OUTPUT INSERTED.id VALUES (' + names.map(n => '@' + n).join(',') + '); UPDATE dbo.AppState SET browserImportCompleted=1 WHERE id=1;');
-  return result.recordset[0].id;
+    ') OUTPUT INSERTED.id VALUES (' + names.map(n => '@' + n).join(',') + '); UPDATE dbo.AppState SET browserImportCompleted=1'+(kind==='users'?',initialSetupCompleted=1':'')+' WHERE id=1;');
+  await writeSources(result.recordset[0].id);return result.recordset[0].id;
 }
 async function remove(pool, kind, id, version) {
   const { table } = entity(kind);
   if(kind==='records'){
-    const used=await pool.request().input('id',sql.Int,positive(id)).query('SELECT TOP(1) id FROM dbo.Records WHERE sourceRecordId=@id');
+    const used=await pool.request().input('id',sql.Int,positive(id)).query('SELECT TOP(1) recordId FROM dbo.RecordSources WHERE sourceId=@id');
     if(used.recordset.length)throw new HttpError(409,'На этот образец ссылаются другие записи. Удаление недоступно.');
   }
   const result = await pool.request().input('id', sql.Int, positive(id)).input('version', sql.Int, positive(version, 'Версия'))

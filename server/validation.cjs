@@ -36,4 +36,15 @@ function normalize(kind, body) {
   }
   throw new HttpError(404, 'Раздел не найден');
 }
-module.exports = { HttpError, normalize, positive };
+// Only the Excel restoration path can restore historical records as historical.
+function normalizeLegacy(body){
+ const result=recordRules.validate(body);
+ for(const [key] of recordRules.fields)if(!['date','sup','line','mixtureId'].includes(key)&&(body[key]===null||body[key]===undefined||body[key]===''))delete result.errors[key];
+ if(typeof body.sup==='string'&&body.sup.trim()&&body.sup.trim().length<=40){delete result.errors.sup;result.value.sup=body.sup.trim();}
+ if(['MB','FM','RW','FMF'].includes(body.line)){delete result.errors.line;result.value.line=body.line;}
+ if(Object.keys(result.errors).length)throw new HttpError(400,Object.values(result.errors)[0]);
+ for(const key of ['actual','equipment'])if(body[key]!==null&&body[key]!==undefined)temperature(body[key]);
+ if(body.author!==null&&body.author!==undefined&&(typeof body.author!=='string'||body.author.length>120))throw new HttpError(400,'Проверьте автора старой записи');
+ return {...result.value,actual:body.actual??null,equipment:body.equipment??null,author:body.author??null,recordFormatVersion:1};
+}
+module.exports = { HttpError, normalize, normalizeLegacy, positive };

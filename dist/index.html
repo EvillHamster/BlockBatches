@@ -23,9 +23,11 @@
     <form class="auth-card login-card" id="login-form" aria-labelledby="login-title">
       <a class="brand login-brand" href="/"><img src="favicon.svg" alt="" width="36" height="36"><span>DefectBatch<span class="brand-dot">.</span></span></a>
       <h1 id="login-title">Вход в систему</h1>
-      <p>Войдите в свою учётную запись.</p>
+      <p id="login-description">Войдите в свою учётную запись.</p>
+      <label id="setup-name-field" hidden>Имя<input name="name" type="text" autocomplete="name" maxlength="120" disabled></label>
       <label>Логин<input name="login" type="text" autocomplete="username" required maxlength="64" autofocus></label>
       <label>Пароль<input name="password" type="password" autocomplete="current-password" required maxlength="128"></label>
+      <label id="setup-confirm-field" hidden>Подтвердите пароль<input name="passwordConfirm" type="password" autocomplete="new-password" maxlength="128" disabled></label>
       <div class="form-error" id="login-error" role="alert" hidden></div>
       <button class="button primary full" type="submit">Войти</button>
     </form>

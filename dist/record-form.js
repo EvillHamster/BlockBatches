@@ -53,7 +53,7 @@
   const d=document.querySelector('#editor'),initial={...item};
   if(!item){initial.date=rules.localDate();initial.line='';}
   const pickerKeys={mixtureId:['mixtures','Смесь'],reasonId:['reasons','Причина'],operatorId:['operators','Оператор']};
-  const required=new Set(rules.fields.filter(([key])=>key!=='operatorId').map(([key])=>key));
+  const required=new Set(rules.fields.filter(([key])=>!['operatorId','sampleNumber'].includes(key)).map(([key])=>key));
   const inputField=(key,type='text',extra='')=>'<input id="record-'+key+'" name="'+key+'" type="'+type+'" value="'+esc(initial[key]??'')+'" '+extra+'>';
   function markup(key,label){
    let control='',wide=['mixtureId','reasonId','description'].includes(key);
@@ -71,24 +71,26 @@
    return '<div class="record-field '+(wide?'record-span-2':'')+'" data-record-field="'+key+'"><label id="label-'+key+'" for="record-'+key+'">'+label+(required.has(key)?' <span class="required" aria-hidden="true">*</span>':' <small>(необязательно)</small>')+'</label>'+control+(key==='sup'?'<small class="record-field-hint" id="sup-hint">Введите ровно 7 цифр</small>':'')+'<small class="record-field-error" id="error-'+key+'" role="status"></small></div>';
   }
   d.classList.add('blocking-record-modal');
-  d.innerHTML='<form id="blocking-record-form" novalidate><button type="button" class="modal-close" data-action="close" aria-label="Закрыть">×</button><h2 id="editor-title">'+(item?'Редактировать запись':'Новая запись')+'</h2><p class="modal-subtitle">Все поля обязательны, кроме оператора. Заполните отмеченные поля.</p>'+
+  d.innerHTML='<form id="blocking-record-form" novalidate><button type="button" class="modal-close" data-action="close" aria-label="Закрыть">×</button><h2 id="editor-title">'+(item?'Редактировать запись':'Новая запись')+'</h2><p class="modal-subtitle">№ образцов и оператор — необязательные поля. Заполните отмеченные поля.</p>'+
    (item?.recordFormatVersion===1?'<p class="record-legacy-note">Старая запись сохранена без преобразований. Для сохранения изменений заполните обязательные поля по текущим правилам.</p>':'')+
-   '<div class="record-fields">'+rules.fields.map(([key,label])=>markup(key,label)+(key==='reasonId'?'<div class="record-field record-span-2" id="record-source-section" hidden><label for="record-source-select">Исходный образец <span aria-hidden="true">*</span></label><input type="hidden" name="sourceRecordId" value="'+esc(initial.sourceRecordId??'')+'"><button type="button" class="source-record-option" id="record-source-select">Выбрать образец</button><a class="source-record-open" target="_blank" rel="noopener" hidden>Перейти к образцу ↗</a><small id="error-sourceRecordId" class="record-field-error" role="status"></small></div>':'')).join('')+'</div><div class="form-error" role="alert" hidden></div><div class="modal-buttons"><button type="button" class="button secondary" data-action="close">Отмена</button><button type="submit" class="button primary" disabled>Сохранить</button></div></form>';
+   '<div class="record-fields">'+rules.fields.map(([key,label])=>markup(key,label)+(key==='reasonId'?'<div class="record-field record-span-2" id="record-source-section" hidden><label for="record-source-select">Исходные образцы <span aria-hidden="true">*</span></label><div class="selected-source-records"></div><button type="button" class="button secondary" id="record-source-select">Выбрать образцы</button><small id="error-sourceRecordId" class="record-field-error" role="status"></small></div>':'')).join('')+'</div><div class="form-error" role="alert" hidden></div><div class="modal-buttons"><button type="button" class="button secondary" data-action="close">Отмена</button><button type="submit" class="button primary" disabled>Сохранить</button></div></form>';
   const form=d.querySelector('form'),pickers={},touched=new Set(),submit=form.querySelector('[type="submit"]');
-  const values=()=>Object.fromEntries(new FormData(form));
-  const sourceSection=d.querySelector('#record-source-section'),sourceInput=form.elements.sourceRecordId,sourceButton=d.querySelector('#record-source-select');
+  let selectedSources=[...rules.sourceIds(initial)];
+  const values=()=>({...Object.fromEntries(new FormData(form)),sourceRecordIds:selectedSources});
+  const sourceSection=d.querySelector('#record-source-section'),sourceButton=d.querySelector('#record-source-select');
   const needsSource=()=>rules.requiresSource(data.reasons?.find(row=>String(row.id)===String(form.elements.reasonId.value))?.name);
   function validate(){const result=rules.validate(values());if(needsSource()&&!result.value.sourceRecordId)result.errors.sourceRecordId='Выберите исходный образец';result.valid=!Object.keys(result.errors).length;return result;}
   function updateSource(){
    sourceSection.hidden=!needsSource();
-   const source=data.records.find(row=>String(row.id)===sourceInput.value),link=sourceSection.querySelector('a');
-   sourceButton.textContent=source?sourceRecordLabel(source,data):'Выбрать образец';link.hidden=!source;if(source)link.href='#record/'+source.id;
+   sourceSection.querySelector('.selected-source-records').innerHTML=selectedSources.map(id=>{const source=data.records.find(row=>row.id===id);return '<div class="selected-source-row"><a class="source-record-link" target="_blank" rel="noopener" href="#record/'+id+'">'+esc(source?sourceRecordLabel(source,data):'Образец недоступен')+' ↗</a><button type="button" class="button secondary" data-remove-source="'+id+'" aria-label="Убрать исходный образец '+id+'">×</button></div>';}).join('');
+   sourceButton.textContent=selectedSources.length?'Изменить выбор образцов':'Выбрать образцы';
   }
   async function selectSource(){
-   const selected=await chooseSourceRecord({data,excludeId:item?.id,selectedId:Number(sourceInput.value)});
-   if(selected!==null)sourceInput.value=String(selected);update();
+   const selected=await chooseSourceRecord({data,excludeId:item?.id,selectedIds:selectedSources});
+   if(selected!==null)selectedSources=selected;update();
   }
   sourceButton.onclick=selectSource;
+  sourceSection.onclick=e=>{const button=e.target.closest('[data-remove-source]');if(button){selectedSources=selectedSources.filter(id=>id!==Number(button.dataset.removeSource));update();}};
   function showErrors(errors,all=false){
    for(const [key] of rules.fields){
     const field=d.querySelector('[data-record-field="'+key+'"]'),input=d.querySelector('#record-'+key),invalid=Boolean(errors[key]);
@@ -105,7 +107,7 @@
   let lastReason=String(initial.reasonId??'');
   const update=()=>{
    const reason=String(form.elements.reasonId.value),changed=reason!==lastReason;lastReason=reason;
-   if(changed)sourceInput.value='';
+   if(changed)selectedSources=[];
    showErrors(validate().errors);
    if(changed&&needsSource())selectSource();
   };

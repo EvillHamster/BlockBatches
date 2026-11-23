@@ -4,7 +4,7 @@ const {randomBytes}=require('node:crypto');
 const {once}=require('node:events');
 const rules=require('../dist/record-rules.js');
 const base={date:'2026-11-21',sup:'0011223',line:'MB',step:'MA',mixtureId:1,batchNumber:'1',palletNumber:'1',sampleNumber:'1',blockedWeight:0,reasonId:1,description:'Проверка',shift:1};
-test('record rules preserve SUP and ranges, require all fields except operator',()=>{
+test('record rules preserve SUP and ranges, require all fields except operator and sample number',()=>{
  for(const sup of ['0011223','1111111'])assert.equal(rules.validate({...base,sup}).value.sup,sup);
  for(const sup of ['123456','12345678','１２３４５６７','12A4567','123-456'])assert.ok(rules.validate({...base,sup}).errors.sup);
  for(const batchNumber of ['0','5','5-12','001-012'])assert.equal(rules.validate({...base,batchNumber}).value.batchNumber,batchNumber);
@@ -17,9 +17,12 @@ test('record rules preserve SUP and ranges, require all fields except operator',
  for(const line of rules.lines)assert.ok(rules.validate({...base,line}).valid);
  for(const step of rules.steps)assert.ok(rules.validate({...base,step}).valid);
  assert.equal(rules.validate(base).value.operatorId,null);
+ assert.ok(rules.validate({...base,sampleNumber:''}).valid);
+ assert.equal(rules.validate({...base,sampleNumber:''}).value.sampleNumber,null);
+ assert.ok(rules.validate({...base,sampleNumber:'bad'}).errors.sampleNumber);
  assert.equal(rules.validate(base).value.reasonId,1);
  assert.equal(rules.validate(base).value.shift,1);
- for(const [key] of rules.fields){if(key!=='operatorId')assert.ok(rules.validate({...base,[key]:''}).errors[key],key);}
+ for(const [key] of rules.fields){if(!['operatorId','sampleNumber'].includes(key))assert.ok(rules.validate({...base,[key]:''}).errors[key],key);}
  assert.equal(rules.validate({...base,description:'   '}).valid,false);
  assert.equal(rules.localDate(new Date(2026,10,21,23,30)),'2026-11-21');
  assert.deepEqual(rules.recentRecordWindow(new Date(2026,0,3,12)),{from:'2025-12-28',to:'2026-01-03'});

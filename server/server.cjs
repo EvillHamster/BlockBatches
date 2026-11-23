@@ -4,6 +4,7 @@ const path = require('node:path');
 const { initialize, config } = require('./db.cjs');
 const repository = require('./repository.cjs');
 const auth = require('./auth.cjs');
+const initialSetup=require('./initial-setup.cjs');
 const excel = require('./excel.cjs');
 const catalogs=require('./catalogs.cjs');
 const Access=require('../dist/permissions.js'),userManagement=require('./user-management.cjs'),bulk=require('./bulk-delete.cjs');
@@ -50,6 +51,12 @@ function createApp(pool) {
         if (url.pathname === '/api/health' && req.method === 'GET') {
           await pool.request().query('SELECT 1 AS ok');
           return json(res, 200, { ok:true, database:config().database, node:process.versions.node });
+        }
+        if(url.pathname==='/api/setup'&&req.method==='GET')return json(res,200,{available:await initialSetup.available(pool)});
+        if(url.pathname==='/api/setup/register'&&req.method==='POST'){
+          auth.throttle(req,'initial-setup');const body=await bodyOf(req);
+          await initialSetup.register(pool,body);
+          return json(res,201,{user:await auth.login(pool,req,res,body)});
         }
         if (url.pathname === '/api/auth/login' && req.method === 'POST')
           return json(res,200,{user:await auth.login(pool,req,res,await bodyOf(req))});
@@ -155,7 +162,6 @@ function createApp(pool) {
 }
 async function start() {
   const pool = await initialize();
-  await require('./bootstrap-keyuser.cjs').ensure(pool);
   const server = createApp(pool);
   const host = process.env.HOST || '127.0.0.1';
   const port = Number(process.env.PORT || 5173);
