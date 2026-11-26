@@ -219,10 +219,8 @@ dialog.blocking-record-modal{width:min(860px,calc(100% - 32px))}
 .record-picker-clear{top:50%;transform:translateY(-50%);right:30px;width:24px;height:24px;display:grid;place-items:center;padding:0;line-height:1}
 .record-picker-clear>svg{display:block;flex-shrink:0}
 .record-field-error{color:#c24f48}
-#page[data-view="journal"] .blocking-record-table th:nth-child(10),
-#page[data-view="journal"] .blocking-record-table td:nth-child(10),
-#page[data-view="journal"] .blocking-record-table th:nth-child(11),
-#page[data-view="journal"] .blocking-record-table td:nth-child(11){text-align:left}
+#page[data-view="journal"] .blocking-record-table [data-column="reasonId"],
+#page[data-view="journal"] .blocking-record-table [data-column="description"]{text-align:left}
 .record-view-navigation{margin-bottom:18px}
 .journal-table-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
 .journal-columns{position:relative}
@@ -265,5 +263,27 @@ dialog.blocking-record-modal{width:min(860px,calc(100% - 32px))}
 .bulk-filters>div{display:flex;gap:12px}
 .bulk-filters dt{color:#8090a6;min-width:80px}
 .bulk-filters dd{margin:0;overflow-wrap:anywhere}
+.source-selection-bar{position:sticky;top:8px;z-index:20;padding:18px;margin-bottom:20px;border:1px solid #a9c4f5;border-radius:10px;background:#f5f8ff;box-shadow:0 4px 12px #203e7110;scroll-margin-top:12px}
+.source-selection-bar>strong{font-size:16px;color:#304563}
+.source-selection-bar>p{font-size:13px;color:#71819a;margin:8px 0 14px}
+.source-selection-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.source-selection-actions>[role="status"]{font-size:14px;min-width:85px}
+.source-selection-list{max-height:220px;overflow:auto;margin-top:14px;border-top:1px solid #dce3ef}
+.source-selection-list>div{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;font-size:13px}
+.source-selection-list small{display:block;color:#956d46;margin-top:4px}
+.source-selection-list>div>span{overflow-wrap:anywhere;min-width:0}
+.journal-record-row{cursor:pointer}
+.journal-record-row:hover>td{background:#f6f9ff}
+.journal-record-row:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}
+.source-row-selected>td{background:#edf4ff!important}
+.source-row-disabled{cursor:not-allowed;color:#8a96a8}
+.blocking-record-table .source-check-cell{min-width:88px;width:88px;max-width:170px;white-space:normal;text-align:center}
+.source-check-cell input{width:17px;height:17px;accent-color:#2563eb}
+.source-check-cell small{display:block;font-size:11px;line-height:1.4;color:#8a7358;margin-top:6px}
+.compact-source-links{display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap;margin-top:5px;max-width:320px}
+.compact-source-links .source-record-link{display:inline-block;min-width:0;max-width:300px;margin:0;padding:3px 6px;font-size:11px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:4px}
+.record-view-wide{grid-column:1/-1}
+.record-view-details>div{min-width:0}
+.record-view-details .source-record-link{min-width:0;white-space:normal;overflow-wrap:anywhere}
 #bulk-delete-form>label{display:block}
 #bulk-delete-form input{display:block;width:100%;border:1px solid #dce1e7;border-radius:6px;padding:10px 12px}

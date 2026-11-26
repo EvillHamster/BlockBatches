@@ -28,7 +28,25 @@ let data={mixtures:[],records:[],users:[]};
 let stateETag=null,recordSearchIndex=null;
 let ready=false,loadError='',refreshBusy=false,currentUser=null;
 let setupMode=false;
+let sourceSelection=null;
+window.chooseSourceRecord=function({excludeId,selectedIds=[]}){
+ return new Promise(resolve=>{
+  sourceSelection={model:SourceSelection.create(data.records,excludeId,selectedIds),resolve,expanded:false,view:{search,mix,line,from,to,page},scroll:window.scrollY};
+  $('#navigation').inert=true;render();$('.source-selection-bar').scrollIntoView({block:'start'});$('[data-action="source-confirm"]').focus();
+ });
+};
+function finishSourceSelection(confirm){
+ if(!sourceSelection)return;if(confirm&&!sourceSelection.model.valid())return;
+ const previous=sourceSelection,ids=confirm?previous.model.ids():null;sourceSelection=null;
+ ({search,mix,line,from,to,page}=previous.view);$('#navigation').inert=document.body.classList.contains('nav-collapsed');render();window.scrollTo(0,previous.scroll);previous.resolve(ids);
+}
+function sourceSelectionBar(){
+ if(!sourceSelection)return '';
+ const model=sourceSelection.model;
+ return '<section class="source-selection-bar" aria-label="Выбор связанных записей"><strong>Выберите одну или несколько записей заблокированного MB</strong><p>Доступны все линии. Связи сохранятся только после сохранения формы.</p><div class="source-selection-actions"><span role="status">Выбрано: '+model.selected.size+'</span><button type="button" class="button primary" data-action="source-confirm" '+(!model.valid()?'disabled':'')+'>Подтвердить выбор</button><button type="button" class="button secondary" data-action="source-clear" '+(!model.selected.size?'disabled':'')+'>Очистить выбор</button><button type="button" class="button secondary" data-action="source-cancel">Отмена</button><button type="button" class="text-button" data-action="source-list" aria-expanded="'+sourceSelection.expanded+'">Выбранные записи ('+model.selected.size+')</button></div><div class="source-selection-list" '+(!sourceSelection.expanded?'hidden':'')+'>'+model.ids().map(id=>{const record=data.records.find(row=>row.id===id),reason=model.reason(id);return '<div><span>'+escapeHTML(record?sourceRecordLabel(record,data):'Запись № '+id)+(reason?'<small>'+escapeHTML(reason)+'</small>':'')+'</span><button type="button" class="button secondary" data-action="source-remove" data-id="'+id+'" aria-label="Снять выбор записи '+id+'">'+icon('close',14)+'</button></div>';}).join('')+'</div></section>';
+}
 function showLogin(message='',initialSetup=false){
+ if(sourceSelection){const pending=sourceSelection;sourceSelection=null;pending.resolve(null);}document.querySelector('#record-viewer')?.close();
  currentUser=null;ready=false;stateETag=null;recordSearchIndex=null;document.querySelector('#role-help')?.close();document.querySelector('.source-picker-modal')?.close();
  $('#application').hidden=true;$('#login-screen').hidden=false;
  if($('#editor').open)$('#editor').close();
@@ -139,7 +157,7 @@ function journalFilters(){
  const lines='<select id="line-filter" aria-label="Фильтр по линии"><option value="">Все линии</option><option>MB</option><option>FM</option><option>RW</option>'+(data.records.some(r=>r.line==='FMF')?'<option>FMF</option>':'')+'</select>';
  return '<div class="filter-controls">'+wrapFilter(dates,from||to,'dates','Очистить даты')+wrapFilter(mixture,mix,'mixture','Очистить смесь')+wrapFilter(lines,line,'line','Очистить линию')+clearAllButton()+'</div>';
 }
-const heading=()=>'<div class="page-heading"><div><div class="eyebrow">DEFECTBATCH / '+eyebrow[tab]+'</div><h1>'+titles[tab]+'<span class="heading-dot"></span></h1><p>'+subtitles[tab]+'</p></div>'+(['journal','mixtures'].includes(tab)&&(tab!=='journal'||can('write'))?'<button class="button primary" data-action="new">'+icon('plus')+(tab==='journal'?'Новая запись':'Добавить смесь')+'</button>':'')+'</div>';
+const heading=()=>'<div class="page-heading"><div><div class="eyebrow">DEFECTBATCH / '+eyebrow[tab]+'</div><h1>'+titles[tab]+'<span class="heading-dot"></span></h1><p>'+subtitles[tab]+'</p></div>'+(!sourceSelection&&['journal','mixtures'].includes(tab)&&(tab!=='journal'||can('write'))?'<button class="button primary" data-action="new">'+icon('plus')+(tab==='journal'?'Новая запись':'Добавить смесь')+'</button>':'')+'</div>';
 function filteredRecords(){return RecordRules.filterRecords(data.records,data.mixtures,{search,mixture:mix,line,from,to},recordSearchIndex).sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id);}
 function footer(total,label){
  const pages=Math.max(1,Math.ceil(total/pageSize));page=Math.min(page,pages);
@@ -159,26 +177,30 @@ function recordDisplay(record,key){
  if(key==='blockedWeight')return Number(value).toLocaleString('ru-RU',{maximumFractionDigits:20});
  return value;
 }
-function sourceRecordLink(record){
- return RecordRules.sourceIds(record).map(id=>{const source=data.records.find(row=>row.id===id);return source?'<a class="source-record-link" href="#record/'+source.id+'">'+escapeHTML(sourceRecordLabel(source,data))+' ↗</a>':'';}).join('');
+function sourceRecordLink(record,full=false){
+ const links=RecordRules.sourceIds(record).map(id=>{const source=data.records.find(row=>row.id===id);return '<a class="source-record-link" title="'+escapeHTML(source?sourceRecordLabel(source,data):'Запись недоступна')+'" href="#record/'+id+'">'+escapeHTML(source?sourceRecordShortLabel(source,data):'Запись № '+id)+' ↗</a>';});
+ return full?links.join(''):links.length?'<div class="compact-source-links">'+links.join('')+'</div>':'';
 }
-let recordViewTrail=[];
-function openRecordView(id){
- const d=$('#editor');if(d.open&&!d.dataset.recordView)return;
- const record=data.records.find(row=>row.id===id);
+let recordViewTrail=[],recordViewReturnHash='#journal';
+const recordViewer=document.createElement('dialog');recordViewer.id='record-viewer';recordViewer.className='modal record-view-modal';recordViewer.setAttribute('aria-labelledby','record-view-title');document.body.append(recordViewer);
+recordViewer.addEventListener('close',()=>{delete recordViewer.dataset.recordView;recordViewTrail=[];if(/^#record\//.test(location.hash))history.replaceState(null,'',recordViewReturnHash||'#journal');});
+recordViewer.addEventListener('click',e=>{if(e.target===recordViewer){const r=recordViewer.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)recordViewer.close();}});
+function openRecordView(id,back=false){
+ if($('#editor').open)return;
+ const d=recordViewer,record=data.records.find(row=>row.id===id);
  if(d.dataset.recordView===String(id))return;
- if(d.dataset.recordView){const backIndex=recordViewTrail.lastIndexOf(id);if(backIndex>=0)recordViewTrail.splice(backIndex);else recordViewTrail.push(Number(d.dataset.recordView));}
- else{recordViewTrail=[];d.addEventListener('close',()=>{delete d.dataset.recordView;recordViewTrail=[];d.classList.remove('record-view-modal');if(/^#record\//.test(location.hash))history.replaceState(null,'','#journal');},{once:true});}
- d.dataset.recordView=String(id);d.classList.remove('blocking-record-modal');d.classList.add('record-view-modal');
- d.innerHTML='<button type="button" class="modal-close" data-action="close" aria-label="Закрыть">'+icon('close',20)+'</button><div class="record-view-navigation"><button type="button" class="button secondary" data-action="record-view-back">'+icon('left',16)+'Назад</button></div><h2 id="editor-title">'+(record?'Образец SUP '+escapeHTML(record.sup):'Образец не найден')+'</h2>'+(record?'<p class="modal-subtitle">Запись № '+record.id+' · просмотр</p><dl class="record-view-details">'+RecordRules.fields.map(([key,label])=>'<div><dt>'+label+'</dt><dd>'+escapeHTML(recordDisplay(record,key))+(key==='reasonId'?sourceRecordLink(record):'')+'</dd></div>').join('')+'</dl>':'<p>Запись удалена или недоступна.</p>')+'<div class="modal-buttons"><button type="button" class="button secondary" data-action="close">Закрыть</button></div>';
+ if(!d.open){recordViewReturnHash=/^#record\//.test(location.hash)?'#journal':location.hash||'#journal';recordViewTrail=[];}
+ else if(!back)recordViewTrail.push(Number(d.dataset.recordView));
+ d.dataset.recordView=String(id);history.replaceState(null,'','#record/'+id);
+ d.innerHTML='<button type="button" class="modal-close" data-action="view-close" aria-label="Закрыть">'+icon('close',20)+'</button><div class="record-view-navigation"><button type="button" class="button secondary" data-action="record-view-back">'+icon('left',16)+'Назад</button></div><h2 id="record-view-title">'+(record?'Образец SUP '+escapeHTML(record.sup):'Образец не найден')+'</h2>'+(record?'<p class="modal-subtitle">Запись № '+record.id+' · просмотр</p><dl class="record-view-details">'+RecordRules.fields.map(([key,label])=>'<div class="'+(key==='description'||key==='reasonId'?'record-view-wide':'')+'"><dt>'+label+'</dt><dd>'+escapeHTML(recordDisplay(record,key))+(key==='reasonId'?sourceRecordLink(record,true):'')+'</dd></div>').join('')+'</dl>':'<p>Запись удалена или недоступна.</p>')+'<div class="modal-buttons">'+(record&&!sourceSelection?(can('write')?'<button type="button" class="button secondary" data-action="view-edit" data-id="'+id+'">Редактировать</button>':'')+(can('delete')?'<button type="button" class="button secondary" data-action="view-delete" data-id="'+id+'">Удалить</button>':''):'')+'<button type="button" class="button secondary" data-action="view-close">Закрыть</button></div>';
  if(!d.open)d.showModal();d.scrollTop=0;
 }
 function journal(){
  const rows=filteredRecords();page=Math.min(page,Math.max(1,Math.ceil(rows.length/pageSize)));
- return '<section class="table-panel"><div class="table-panel-heading"><div><h2>Записи контроля <span id="record-count" aria-live="polite" aria-atomic="true">'+rows.length+'</span></h2><p>Блокировки производственных партий</p></div>'+'<div class="journal-table-tools">'+journalColumnSettings()+(can('bulk')?'<button type="button" class="button secondary" data-action="bulk-delete">'+icon('trash',16)+'Удалить по фильтрам</button>':'')+excelButtons('records')+'</div></div><div class="filter-bar">'+searchBox('Поиск по SUP, смеси или описанию…')+journalFilters()+'</div>'+
- '<div class="table-scroll"><table class="blocking-record-table" style="min-width:'+Math.max(440,1900-hiddenJournalColumns.size*135)+'px"><thead><tr>'+RecordRules.fields.map(([key,label])=>'<th'+columnAttributes(key)+'>'+label+'</th>').join('')+'<th'+(!can('write')&&!can('delete')?' hidden':'')+'>Действия</th></tr></thead><tbody>'+
- rows.slice((page-1)*pageSize,page*pageSize).map(record=>'<tr>'+RecordRules.fields.map(([key])=>'<td'+columnAttributes(key)+' class="'+(key==='description'?'record-description':key==='sup'?'sup-cell':key==='date'?'date-cell':'')+'">'+escapeHTML(recordDisplay(record,key))+(key==='reasonId'?sourceRecordLink(record):'')+'</td>').join('')+'<td'+(!can('write')&&!can('delete')?' hidden':'')+'>'+actions('record',record.id)+'</td></tr>').join('')+
- '</tbody></table></div>'+(!rows.length?empty('Записи не найдены','Измените фильтры или добавьте новую запись.'):'')+footer(rows.length,'записей')+'</section>';
+ return sourceSelectionBar()+'<section class="table-panel"><div class="table-panel-heading"><div><h2>Записи контроля <span id="record-count" aria-live="polite" aria-atomic="true">'+rows.length+'</span></h2><p>Блокировки производственных партий</p></div><div class="journal-table-tools">'+(!sourceSelection?journalColumnSettings()+(can('bulk')?'<button type="button" class="button secondary" data-action="bulk-delete">'+icon('trash',16)+'Удалить по фильтрам</button>':'')+excelButtons('records'):'')+'</div></div><div class="filter-bar">'+searchBox('Поиск по SUP, смеси или описанию…')+journalFilters()+'</div><div class="table-scroll"><table class="blocking-record-table" style="min-width:'+Math.max(440,1900-hiddenJournalColumns.size*135)+'px"><thead><tr>'+(sourceSelection?'<th class="source-check-cell">Выбор</th>':'')+RecordRules.fields.map(([key,label])=>'<th'+columnAttributes(key)+'>'+label+'</th>').join('')+(!sourceSelection?'<th'+(!can('write')&&!can('delete')?' hidden':'')+'>Действия</th>':'')+'</tr></thead><tbody>'+rows.slice((page-1)*pageSize,page*pageSize).map(record=>{
+ const reason=sourceSelection?.model.reason(record.id),selected=sourceSelection?.model.selected.has(record.id);
+ return '<tr data-record-id="'+record.id+'" tabindex="0" class="journal-record-row '+(selected?'source-row-selected ':'')+(reason?'source-row-disabled':'')+'" '+(sourceSelection?'aria-selected="'+Boolean(selected)+'"':'')+' title="'+escapeHTML(reason|| (sourceSelection?'Переключить выбор записи':'Открыть запись'))+'">'+(sourceSelection?'<td class="source-check-cell"><input type="checkbox" data-action="source-toggle" data-id="'+record.id+'" aria-label="Выбрать запись '+record.sup+'" '+(selected?'checked ':'')+(reason?'disabled':'')+'>'+(reason?'<small>'+escapeHTML(reason)+'</small>':'')+'</td>':'')+RecordRules.fields.map(([key])=>'<td'+columnAttributes(key)+' class="'+(key==='description'?'record-description':key==='sup'?'sup-cell':key==='date'?'date-cell':'')+'">'+escapeHTML(recordDisplay(record,key))+(key==='reasonId'?sourceRecordLink(record):'')+'</td>').join('')+(!sourceSelection?'<td'+(!can('write')&&!can('delete')?' hidden':'')+'>'+actions('record',record.id)+'</td>':'')+'</tr>';
+ }).join('')+'</tbody></table></div>'+(!rows.length?empty('Записи не найдены','Измените фильтры или добавьте новую запись.'):'')+footer(rows.length,'записей')+'</section>';
 }
 function mixtures(){
  const rows=data.mixtures.filter(m=>m.archived===archived&&m.name.toLowerCase().includes(search.toLowerCase()));page=Math.min(page,Math.max(1,Math.ceil(rows.length/pageSize)));
@@ -260,11 +282,13 @@ function render(){
  }
 }
 function showAddressedRecord(){const match=/^#record\/([1-9]\d*)$/.exec(location.hash);if(match&&ready)openRecordView(Number(match[1]));}
-function navigate(){tab=Object.hasOwn(titles,location.hash.slice(1))?location.hash.slice(1):'journal';search='';mix='';line='';from='';to='';page=1;archived=false;render();}
+function navigate(){if(sourceSelection){history.replaceState(null,'','#journal');render();return;}tab=Object.hasOwn(titles,location.hash.slice(1))?location.hash.slice(1):'journal';search='';mix='';line='';from='';to='';page=1;archived=false;render();}
 window.addEventListener('hashchange',navigate);
 document.addEventListener('keydown',e=>{
+ const row=e.target.closest('[data-record-id]');if(row&&e.target===row&&['Enter',' '].includes(e.key)){e.preventDefault();const id=Number(row.dataset.recordId);if(sourceSelection){sourceSelection.model.toggle(id);render();$('[data-record-id="'+id+'"]')?.focus();}else openRecordView(id);return;}
+ if(e.key==='Escape'&&sourceSelection&&!document.querySelector('dialog[open]')){e.preventDefault();finishSourceSelection(false);return;}
  if(e.key==='F1'&&currentUser){e.preventDefault();openRoleHelp(currentUser);return;}
- const menu=$('.journal-columns[open]');if(e.key==='Escape'&&menu){e.preventDefault();menu.open=false;columnsOpen=false;menu.querySelector('summary').focus();}
+ const menu=$('.journal-columns[open]');if(e.key==='Escape'&&menu&&!document.querySelector('dialog[open]')){e.preventDefault();menu.open=false;columnsOpen=false;menu.querySelector('summary').focus();}
 });
 document.addEventListener('change',e=>{
  const key=e.target.dataset.columnToggle;if(!key)return;
@@ -272,13 +296,26 @@ document.addEventListener('change',e=>{
  saveColumnSettings();columnsOpen=true;render();document.querySelector('[data-column-toggle="'+key+'"]')?.focus();
 });
 document.addEventListener('click',async e=>{
+ const sourceLink=e.target.closest('a[href^="#record/"]');if(sourceLink&&!$('#editor').open){e.preventDefault();openRecordView(Number(sourceLink.getAttribute('href').slice(8)));return;}
+ const row=e.target.closest('[data-record-id]');if(row&&!e.target.closest('button,a,input,select,textarea,label,summary,details,[contenteditable]')){const id=Number(row.dataset.recordId);if(sourceSelection){if(!sourceSelection.model.toggle(id))notify(sourceSelection.model.reason(id));render();$('[data-record-id="'+id+'"]')?.focus();}else openRecordView(id);return;}
  const columnMenu=$('.journal-columns[open]');if(columnMenu&&!e.target.closest('.journal-columns')){columnMenu.open=false;columnsOpen=false;}
- const navigation=e.target.closest('[data-tab]');if(navigation){location.hash=navigation.dataset.tab;if(innerWidth<=700)setCollapsed(true);return;}
+ const navigation=e.target.closest('[data-tab]');if(navigation){if(sourceSelection){notify('Сначала подтвердите или отмените выбор записей');return;}location.hash=navigation.dataset.tab;if(innerWidth<=700)setCollapsed(true);return;}
  const b=e.target.closest('[data-action]');if(!b)return;
  const action=b.dataset.action,id=Number(b.dataset.id);
+ if(action.startsWith('source-')&&sourceSelection){
+  if(action==='source-confirm'){finishSourceSelection(true);return;}
+  if(action==='source-cancel'){finishSourceSelection(false);return;}
+  if(action==='source-clear')sourceSelection.model.clear();
+  if(action==='source-list')sourceSelection.expanded=!sourceSelection.expanded;
+  if(action==='source-remove')sourceSelection.model.remove(id);
+  if(action==='source-toggle')sourceSelection.model.toggle(id);
+  render();return;
+ }
+ if(action==='view-close'){recordViewer.close();return;}
+ if(action==='view-edit'||action==='view-delete'){if(sourceSelection)return;recordViewer.close();if(action==='view-edit'&&can('write'))openEditor('record',id);if(action==='view-delete'&&can('delete'))confirmDelete('record',id);return;}
  if(action==='help'){openRoleHelp(currentUser);return;}
  if(action==='bulk-delete'){if(can('bulk'))openBulkDelete();return;}
- if(action==='record-view-back'){if(recordViewTrail.length)location.hash='record/'+recordViewTrail.at(-1);else $('#editor').close();return;}
+ if(action==='record-view-back'){if(recordViewTrail.length)openRecordView(recordViewTrail.pop(),true);else recordViewer.close();return;}
  if(action==='columns-show-all'){hiddenJournalColumns.clear();saveColumnSettings();columnsOpen=true;render();$('[data-action="columns-show-all"]')?.focus();return;}
  if(action==='retry-load'){await bootstrap();return;}
  if(action==='catalog-delete'){if(!can('catalogs'))return;confirmCatalogDelete(b.dataset.kind,id);return;}
@@ -470,13 +507,14 @@ $('#login-form').onsubmit=async e=>{
  finally{button.disabled=false;}
 };
 $('#logout').onclick=async()=>{
+ if(sourceSelection){notify('Сначала подтвердите или отмените выбор записей');return;}
  try{await api('/auth/logout',{method:'POST',body:'{}'});showLogin();}
  catch(error){notify(error.message);}
 };
 navigate();
 bootstrap();
 setInterval(async()=>{
- if(!ready||!currentUser||refreshBusy||document.hidden||$('#editor').open||$('#mixture-filter-popover:not([hidden])')||$('.journal-columns[open]'))return;
+ if(!ready||!currentUser||refreshBusy||sourceSelection||recordViewer.open||document.hidden||$('#editor').open||$('#mixture-filter-popover:not([hidden])')||$('.journal-columns[open]'))return;
  refreshBusy=true;
  try{
   const focused=document.activeElement;

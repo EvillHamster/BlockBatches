@@ -82,12 +82,16 @@
   function validate(){const result=rules.validate(values());if(needsSource()&&!result.value.sourceRecordId)result.errors.sourceRecordId='Выберите исходный образец';result.valid=!Object.keys(result.errors).length;return result;}
   function updateSource(){
    sourceSection.hidden=!needsSource();
-   sourceSection.querySelector('.selected-source-records').innerHTML=selectedSources.map(id=>{const source=data.records.find(row=>row.id===id);return '<div class="selected-source-row"><a class="source-record-link" target="_blank" rel="noopener" href="#record/'+id+'">'+esc(source?sourceRecordLabel(source,data):'Образец недоступен')+' ↗</a><button type="button" class="button secondary" data-remove-source="'+id+'" aria-label="Убрать исходный образец '+id+'">×</button></div>';}).join('');
+   sourceSection.querySelector('.selected-source-records').innerHTML=selectedSources.map(id=>{const source=data.records.find(row=>row.id===id);return '<div class="selected-source-row"><a class="source-record-link" target="_blank" rel="noopener" title="'+esc(source?sourceRecordLabel(source,data):'Образец недоступен')+'" href="#record/'+id+'">'+esc(source?sourceRecordShortLabel(source,data):'Образец недоступен')+' ↗</a><button type="button" class="button secondary" data-remove-source="'+id+'" aria-label="Убрать исходный образец '+id+'">×</button></div>';}).join('');
    sourceButton.textContent=selectedSources.length?'Изменить выбор образцов':'Выбрать образцы';
   }
   async function selectSource(){
+   if(d.dataset.sourceSelecting)return;
+   const scroll=d.scrollTop;d.dataset.sourceSelecting='true';Object.values(pickers).forEach(p=>p.close());d.close();
    const selected=await chooseSourceRecord({data,excludeId:item?.id,selectedIds:selectedSources});
-   if(selected!==null)selectedSources=selected;update();
+   delete d.dataset.sourceSelecting;
+   if(document.querySelector('#application').hidden){onClose();return;}
+   if(selected!==null)selectedSources=selected;update();d.showModal();d.scrollTop=scroll;sourceButton.focus({preventScroll:true});
   }
   sourceButton.onclick=selectSource;
   sourceSection.onclick=e=>{const button=e.target.closest('[data-remove-source]');if(button){selectedSources=selectedSources.filter(id=>id!==Number(button.dataset.removeSource));update();}};
@@ -141,7 +145,8 @@
    catch(error){if(error.fields)showErrors(error.fields,true);err.hidden=false;err.textContent=error.message;}
    finally{delete form.dataset.saving;controls.forEach(control=>control.disabled=false);update();}
   };
-  d.addEventListener('close',()=>{d.classList.remove('blocking-record-modal');Object.values(pickers).forEach(p=>p.close());},{once:true});
+  function onClose(){if(d.dataset.sourceSelecting)return;d.classList.remove('blocking-record-modal');Object.values(pickers).forEach(p=>p.close());d.removeEventListener('close',onClose);}
+  d.addEventListener('close',onClose);
   update();d.showModal();d.scrollTop=0;
  };
 })();
